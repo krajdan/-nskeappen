@@ -42,6 +42,9 @@ export default function App() {
     notes: ''
   });
 
+  // Kontrollera om nuvarande inloggade användare är administratör för denna lista
+  const isAdmin = !wishlist.adminIds || (user && wishlist.adminIds.includes(user.uid));
+
   const showToast = (message, type = 'success') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, message, type }]);
@@ -104,16 +107,36 @@ export default function App() {
     
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
-        setWishlist(docSnap.data());
+        const data = docSnap.data();
+        setWishlist(data);
+        
+        // --- LOGIK FÖR INBJUDAN ---
+        // Om det finns en inbjudningskod i URL:en och användaren är inloggad
+        const urlParams = new URLSearchParams(window.location.search);
+        const inviteToken = urlParams.get('invite');
+        
+        if (inviteToken && user && data.inviteToken === inviteToken) {
+          const currentAdmins = data.adminIds || [];
+          if (!currentAdmins.includes(user.uid)) {
+            const updatedAdmins = [...currentAdmins, user.uid];
+            // Lägg till användaren som admin och stäng inbjudningskoden
+            setDoc(docRef, { ...data, adminIds: updatedAdmins, inviteToken: null }, { merge: true })
+              .then(() => {
+                showToast("Inbjudan godkänd! Du är nu med-förälder för denna lista. 🎉");
+                // Städa bort inbjudan från URL:en så den blir ren igen
+                window.history.replaceState({}, document.title, window.location.pathname + `?listId=${listId}`);
+              })
+              .catch(err => console.error("Kunde inte registrera admin:", err));
+          }
+        }
       } else {
         const initialData = {
           ...INITIAL_WISHLIST,
           id: listId,
           createdAt: new Date().toISOString()
         };
-        // Skapa bara i molnet om vi är inloggade, annars spara i state tills vidare
         if (user) {
-          setDoc(docRef, { ...initialData, ownerId: user.uid })
+          setDoc(docRef, { ...initialData, adminIds: [user.uid] })
             .then(() => setWishlist(initialData))
             .catch(err => console.error("Kunde inte spara grundlista:", err));
         } else {
@@ -131,13 +154,15 @@ export default function App() {
     if (db && listId && user) {
       try {
         const docRef = doc(db, 'wishlists', listId);
+        const currentAdmins = updatedList.adminIds || wishlist.adminIds || [user.uid];
+        
         await setDoc(docRef, { 
           ...updatedList, 
-          ownerId: user.uid 
+          adminIds: currentAdmins
         });
       } catch (err) {
         console.error("Kunde inte spara till molnet:", err);
-        showToast("Kunde inte spara till molnet. Har du behörighet?", "error");
+        showToast("Ändringen blockerades. Du saknar administratörsbehörighet!", "error");
       }
     } else {
       localStorage.setItem(`wishlist_offline_${listId}`, JSON.stringify(updatedList));
@@ -145,6 +170,34 @@ export default function App() {
         showToast("Du är inte inloggad. Ändringar sparas bara lokalt.", "error");
       }
     }
+  };
+
+  // Generera en unik inbjudningslänk för en med-förälder
+  const handleCreateInviteLink = async () => {
+    if (!user || !isAdmin) {
+      showToast("Bara administratörer kan bjuda in andra!", "error");
+      return;
+    }
+    const token = 'inv-' + Math.random().toString(36).substring(2, 11);
+    const updatedList = { ...wishlist, inviteToken: token };
+    setWishlist(updatedList);
+    
+    if (db && listId) {
+      const docRef = doc(db, 'wishlists', listId);
+      await setDoc(docRef, updatedList, { merge: true });
+    }
+    
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?listId=${listId}&invite=${token}`;
+    
+    // Kopiera till urklipp
+    const tempInput = document.createElement("input");
+    tempInput.value = inviteUrl;
+    document.body.appendChild(tempInput);
+    tempInput.select();
+    document.execCommand("copy");
+    document.body.removeChild(tempInput);
+    
+    showToast("Inbjudningslänk kopierad! Skicka den till med-föräldern. 👥");
   };
 
   const handleTitleChange = (e) => {
@@ -181,7 +234,7 @@ export default function App() {
     
     saveWishlist({ ...wishlist, children: updatedChildren, items: updatedItems });
     if (activeTab === childName) setActiveTab('Alla');
-    showToast(`${childName} och tillhörande önskningar raderades.`);
+    showToast(`${childName} raderades.`);
   };
 
   const handleAddWish = (e) => {
@@ -249,7 +302,7 @@ export default function App() {
 
     saveWishlist({ ...wishlist, items: updatedItems });
     setReservationModal({ show: false, itemId: null, name: '' });
-    showToast("Önskningen har reserverats! Tack så mycket!");
+    showToast("Önskningen har reserverats!");
   };
 
   const handleCancelReservation = (id) => {
@@ -298,6 +351,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-slate-50 to-pink-50 text-slate-800 font-sans pb-20">
       
+      {/* Toast-notiser */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
         {toasts.map(t => (
           <div key={t.id} className={`p-4 rounded-xl shadow-lg border text-sm font-medium transition-all duration-300 transform translate-y-0 flex items-center justify-between pointer-events-auto ${
@@ -312,6 +366,7 @@ export default function App() {
         ))}
       </div>
 
+      {/* Header */}
       <header className="bg-white border-b border-slate-100 sticky top-0 z-30 shadow-sm backdrop-blur-md bg-white/90">
         <div className="max-w-5xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-4">
           
@@ -352,7 +407,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* INLOGGNING - NU SYNLIG I ALLA LÄGEN */}
+            {/* Inloggning Google - Alltid synlig för administratörer */}
             {user ? (
               <div className="flex items-center gap-2 bg-slate-100 p-1 pl-3 rounded-xl ml-2 border border-slate-200">
                 <span className="text-xs font-bold text-slate-700 truncate max-w-[100px]">
@@ -374,6 +429,16 @@ export default function App() {
               </button>
             )}
 
+            {/* Inbjudningsknapp för med-admin */}
+            {mode === 'edit' && isAdmin && user && (
+              <button
+                onClick={handleCreateInviteLink}
+                className="w-full sm:w-auto px-5 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+              >
+                👥 Bjud in med-förälder
+              </button>
+            )}
+
             <button
               onClick={handleCopyShareLink}
               className="w-full sm:w-auto px-5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold rounded-xl shadow-md shadow-indigo-200 transition-all flex items-center justify-center gap-2"
@@ -390,10 +455,17 @@ export default function App() {
 
       <main className="max-w-5xl mx-auto px-4 mt-8">
         
+        {/* Säkerhetsmeddelande om man försöker redigera utan att vara admin */}
+        {mode === 'edit' && !isAdmin && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl mb-6 text-sm font-medium animate-pulse">
+            🔒 Du är i föräldraläge men är inte inloggad som administratör för denna lista. Logga in eller använd en inbjudningslänk för att kunna göra ändringar.
+          </div>
+        )}
+
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 mb-8">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex-1">
-              {mode === 'edit' ? (
+              {mode === 'edit' && isAdmin ? (
                 <div className="group relative">
                   <input
                     type="text"
@@ -417,8 +489,8 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 self-start md:self-center bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100 text-xs text-slate-500">
-              <span className={`w-2.5 h-2.5 rounded-full ${db && user ? 'bg-emerald-500' : 'bg-amber-400'}`}></span>
-              <span>{db && user ? 'Realtidssynk aktiv' : 'Lokalt/Utloggad'}</span>
+              <span className={`w-2.5 h-2.5 rounded-full ${db && user && isAdmin ? 'bg-emerald-500' : 'bg-amber-400'}`}></span>
+              <span>{db && user && isAdmin ? 'Realtidssynk aktiv' : 'Lokalt/Ej Admin'}</span>
             </div>
           </div>
 
@@ -426,10 +498,10 @@ export default function App() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Barn i familjen:</span>
               
-              {wishlist.children.map(child => (
+              {wishlist.children?.map(child => (
                 <div key={child} className="inline-flex items-center gap-1.5 bg-indigo-50/75 border border-indigo-100 px-3 py-1.5 rounded-xl text-xs font-bold text-indigo-800">
                   <span>👶 {child}</span>
-                  {mode === 'edit' && (
+                  {mode === 'edit' && isAdmin && (
                     <button 
                       onClick={() => handleRemoveChild(child)}
                       title={`Radera ${child}`}
@@ -441,7 +513,7 @@ export default function App() {
                 </div>
               ))}
 
-              {mode === 'edit' && (
+              {mode === 'edit' && isAdmin && (
                 <div className="relative">
                   {!showAddChild ? (
                     <button
@@ -471,9 +543,9 @@ export default function App() {
 
         </div>
 
-        <div className={`grid gap-8 ${mode === 'edit' ? 'lg:grid-cols-3' : 'grid-cols-1'}`}>
+        <div className={`grid gap-8 ${mode === 'edit' && isAdmin ? 'lg:grid-cols-3' : 'grid-cols-1'}`}>
           
-          {mode === 'edit' && (
+          {mode === 'edit' && isAdmin && (
             <div className="lg:col-span-1">
               <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 sticky top-24">
                 <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-4">
@@ -489,8 +561,8 @@ export default function App() {
                       onChange={(e) => setNewWish(prev => ({ ...prev, child: e.target.value }))}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     >
-                      {wishlist.children.length === 0 && <option value="">Välj eller lägg till barn...</option>}
-                      {wishlist.children.map(c => (
+                      {(!wishlist.children || wishlist.children.length === 0) && <option value="">Välj eller lägg till barn...</option>}
+                      {wishlist.children?.map(c => (
                         <option key={c} value={c}>{c}</option>
                       ))}
                     </select>
@@ -580,7 +652,7 @@ export default function App() {
             </div>
           )}
 
-          <div className={mode === 'edit' ? 'lg:col-span-2' : 'col-span-1'}>
+          <div className={mode === 'edit' && isAdmin ? 'lg:col-span-2' : 'col-span-1'}>
             
             <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-6 scrollbar-hide">
               <button
@@ -591,11 +663,11 @@ export default function App() {
                     : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-100'
                 }`}
               >
-                🌍 Alla barn ({wishlist.items.length})
+                🌍 Alla barn ({wishlist.items?.length || 0})
               </button>
               
-              {wishlist.children.map(child => {
-                const count = wishlist.items.filter(item => item.child.toLowerCase() === child.toLowerCase()).length;
+              {wishlist.children?.map(child => {
+                const count = wishlist.items?.filter(item => item.child.toLowerCase() === child.toLowerCase()).length || 0;
                 return (
                   <button
                     key={child}
@@ -612,7 +684,7 @@ export default function App() {
               })}
             </div>
 
-            {filteredItems.length === 0 ? (
+            {(!wishlist.items || filteredItems.length === 0) ? (
               <div className="bg-white rounded-3xl p-12 text-center border border-slate-100 shadow-sm flex flex-col items-center">
                 <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-2xl mb-4">
                   🧸
@@ -701,13 +773,15 @@ export default function App() {
                             ) : (
                               <div className="flex items-center gap-2">
                                 <span className="text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-md border border-amber-100">Ej reserverad</span>
-                                <button
-                                  onClick={() => handleRemoveWish(item.id)}
-                                  className="ml-auto text-xs font-bold text-slate-400 hover:text-red-600 p-1"
-                                  title="Ta bort önskning"
-                                >
-                                  Ta bort 🗑️
-                                </button>
+                                {isAdmin && (
+                                  <button
+                                    onClick={() => handleRemoveWish(item.id)}
+                                    className="ml-auto text-xs font-bold text-slate-400 hover:text-red-600 p-1"
+                                    title="Ta bort önskning"
+                                  >
+                                    Ta bort 🗑️
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
