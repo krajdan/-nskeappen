@@ -32,6 +32,9 @@ export default function App() {
   
   const [reservationModal, setReservationModal] = useState({ show: false, itemId: null, name: '' });
   
+  // Nytt state för att hålla koll på redigering
+  const [editingId, setEditingId] = useState(null);
+  
   const [newWish, setNewWish] = useState({
     child: '',
     name: '',
@@ -87,12 +90,8 @@ export default function App() {
       setListId(sharedId);
       setMode('view');
     } else {
-      let localId = localStorage.getItem('myWishlistId');
-      if (!localId) {
-        localId = 'list-' + Math.random().toString(36).substring(2, 11);
-        localStorage.setItem('myWishlistId', localId);
-      }
-      setListId(localId);
+      // Tvingar prototypen att alltid hämta din exakta lista från databasen
+      setListId('list-8vg83bmvt');
       setMode('edit');
     }
   }, []);
@@ -172,7 +171,6 @@ export default function App() {
     }
   };
 
-  // Generera en unik inbjudningslänk för en med-förälder
   const handleCreateInviteLink = async () => {
     if (!user || !isAdmin) {
       showToast("Bara administratörer kan bjuda in andra!", "error");
@@ -189,7 +187,6 @@ export default function App() {
     
     const inviteUrl = `${window.location.origin}${window.location.pathname}?listId=${listId}&invite=${token}`;
     
-    // Kopiera till urklipp
     const tempInput = document.createElement("input");
     tempInput.value = inviteUrl;
     document.body.appendChild(tempInput);
@@ -237,29 +234,42 @@ export default function App() {
     showToast(`${childName} raderades.`);
   };
 
-  const handleAddWish = (e) => {
+  // Kombinerad submit-funktion för Ny och Redigera
+  const handleSubmitWish = (e) => {
     e.preventDefault();
     if (!newWish.name.trim()) {
       showToast("Önskningen måste ha ett namn!", "error");
       return;
     }
 
-    const item = {
-      id: 'wish-' + Math.random().toString(36).substring(2, 11),
-      child: newWish.child || wishlist.children[0] || 'Okänd',
-      name: newWish.name.trim(),
-      link: newWish.link.trim(),
-      price: newWish.price.trim(),
-      priority: newWish.priority,
-      category: newWish.category,
-      notes: newWish.notes.trim(),
-      reserved: false,
-      reservedBy: ""
-    };
+    if (editingId) {
+      // Vi är i redigeringsläge
+      const updatedItems = wishlist.items.map(item => 
+        item.id === editingId ? { ...item, ...newWish } : item
+      );
+      saveWishlist({ ...wishlist, items: updatedItems });
+      showToast("Önskningen har uppdaterats!");
+      setEditingId(null);
+    } else {
+      // Skapar ny önskning
+      const item = {
+        id: 'wish-' + Math.random().toString(36).substring(2, 11),
+        child: newWish.child || wishlist.children[0] || 'Okänd',
+        name: newWish.name.trim(),
+        link: newWish.link.trim(),
+        price: newWish.price.trim(),
+        priority: newWish.priority,
+        category: newWish.category,
+        notes: newWish.notes.trim(),
+        reserved: false,
+        reservedBy: ""
+      };
+      const updatedItems = [item, ...wishlist.items];
+      saveWishlist({ ...wishlist, items: updatedItems });
+      showToast(`Lade till önskningen "${item.name}"!`);
+    }
 
-    const updatedItems = [item, ...wishlist.items];
-    saveWishlist({ ...wishlist, items: updatedItems });
-    
+    // Töm formuläret
     setNewWish({
       child: wishlist.children[0] || '',
       name: '',
@@ -269,8 +279,34 @@ export default function App() {
       category: 'Leksaker',
       notes: ''
     });
-    
-    showToast(`Lade till önskningen "${item.name}"!`);
+  };
+
+  // Nya funktioner för att hantera klick på Redigera
+  const handleEditClick = (item) => {
+    setNewWish({
+      child: item.child,
+      name: item.name,
+      link: item.link || '',
+      price: item.price || '',
+      priority: item.priority || 'Medel',
+      category: item.category || 'Leksaker',
+      notes: item.notes || ''
+    });
+    setEditingId(item.id);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setNewWish({
+      child: wishlist.children[0] || '',
+      name: '',
+      link: '',
+      price: '',
+      priority: 'Medel',
+      category: 'Leksaker',
+      notes: ''
+    });
   };
 
   const handleRemoveWish = (id) => {
@@ -549,10 +585,10 @@ export default function App() {
             <div className="lg:col-span-1">
               <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 sticky top-24">
                 <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-4">
-                  <span>✍️</span> Lägg till en önskning
+                  <span>{editingId ? '✏️' : '✍️'}</span> {editingId ? 'Redigera önskning' : 'Lägg till en önskning'}
                 </h3>
                 
-                <form onSubmit={handleAddWish} className="space-y-4">
+                <form onSubmit={handleSubmitWish} className="space-y-4">
                   
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1.5">Vem önskar sig detta?</label>
@@ -640,12 +676,27 @@ export default function App() {
                     ></textarea>
                   </div>
 
-                  <button
-                    type="submit"
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white text-sm font-bold rounded-xl shadow-md shadow-indigo-100 transition-all flex items-center justify-center gap-2"
-                  >
-                    <span>➕</span> Spara önskning
-                  </button>
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="submit"
+                      className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white text-sm font-bold rounded-xl shadow-md shadow-indigo-100 transition-all flex items-center justify-center gap-2"
+                    >
+                      {editingId ? (
+                        <><span>💾</span> Uppdatera</>
+                      ) : (
+                        <><span>➕</span> Spara önskning</>
+                      )}
+                    </button>
+                    {editingId && (
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-xl transition-all"
+                      >
+                        Avbryt
+                      </button>
+                    )}
+                  </div>
 
                 </form>
               </div>
@@ -774,13 +825,22 @@ export default function App() {
                               <div className="flex items-center gap-2">
                                 <span className="text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-md border border-amber-100">Ej reserverad</span>
                                 {isAdmin && (
-                                  <button
-                                    onClick={() => handleRemoveWish(item.id)}
-                                    className="ml-auto text-xs font-bold text-slate-400 hover:text-red-600 p-1"
-                                    title="Ta bort önskning"
-                                  >
-                                    Ta bort 🗑️
-                                  </button>
+                                  <div className="ml-auto flex items-center gap-2">
+                                    <button
+                                      onClick={() => handleEditClick(item)}
+                                      className="text-xs font-bold text-indigo-500 hover:text-indigo-700 p-1"
+                                      title="Redigera önskning"
+                                    >
+                                      Redigera ✏️
+                                    </button>
+                                    <button
+                                      onClick={() => handleRemoveWish(item.id)}
+                                      className="text-xs font-bold text-slate-400 hover:text-red-600 p-1"
+                                      title="Ta bort önskning"
+                                    >
+                                      Ta bort 🗑️
+                                    </button>
+                                  </div>
                                 )}
                               </div>
                             )}
