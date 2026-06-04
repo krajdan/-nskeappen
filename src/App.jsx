@@ -22,7 +22,7 @@ const CATEGORIES = [
 export default function App() {
   const [listId, setListId] = useState('');
   const [wishlist, setWishlist] = useState(INITIAL_WISHLIST);
-  const [mode, setMode] = useState('view'); // 'edit' (Förälder) eller 'view' (Släkting)
+  const [mode, setMode] = useState('view'); 
   const [activeTab, setActiveTab] = useState('Alla');
   const [isLoading, setIsLoading] = useState(true);
   const [showAddChild, setShowAddChild] = useState(false);
@@ -31,8 +31,6 @@ export default function App() {
   const [user, setUser] = useState(null);
   
   const [reservationModal, setReservationModal] = useState({ show: false, itemId: null, name: '' });
-  
-  // Nytt state för att hålla koll på redigering
   const [editingId, setEditingId] = useState(null);
   
   const [newWish, setNewWish] = useState({
@@ -45,7 +43,6 @@ export default function App() {
     notes: ''
   });
 
-  // Kontrollera om nuvarande inloggade användare är administratör för denna lista
   const isAdmin = !wishlist.adminIds || (user && wishlist.adminIds.includes(user.uid));
 
   const showToast = (message, type = 'success') => {
@@ -82,6 +79,7 @@ export default function App() {
     }
   };
 
+  // DEN VIKTIGA FIXEN FÖR LIST-ID
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const sharedId = urlParams.get('listId');
@@ -117,8 +115,6 @@ export default function App() {
         const data = docSnap.data();
         setWishlist(data);
         
-        // --- LOGIK FÖR INBJUDAN ---
-        // Om det finns en inbjudningskod i URL:en och användaren är inloggad
         const urlParams = new URLSearchParams(window.location.search);
         const inviteToken = urlParams.get('invite');
         
@@ -126,11 +122,9 @@ export default function App() {
           const currentAdmins = data.adminIds || [];
           if (!currentAdmins.includes(user.uid)) {
             const updatedAdmins = [...currentAdmins, user.uid];
-            // Lägg till användaren som admin och stäng inbjudningskoden
             setDoc(docRef, { ...data, adminIds: updatedAdmins, inviteToken: null }, { merge: true })
               .then(() => {
                 showToast("Inbjudan godkänd! Du är nu med-förälder för denna lista. 🎉");
-                // Städa bort inbjudan från URL:en så den blir ren igen
                 window.history.replaceState({}, document.title, window.location.pathname + `?listId=${listId}`);
               })
               .catch(err => console.error("Kunde inte registrera admin:", err));
@@ -158,10 +152,10 @@ export default function App() {
 
   const saveWishlist = async (updatedList) => {
     setWishlist(updatedList);
-    if (db && listId && user) {
+    if (db && listId) {
       try {
         const docRef = doc(db, 'wishlists', listId);
-        const currentAdmins = updatedList.adminIds || wishlist.adminIds || [user.uid];
+        const currentAdmins = updatedList.adminIds || wishlist.adminIds || (user ? [user.uid] : []);
         
         await setDoc(docRef, { 
           ...updatedList, 
@@ -169,7 +163,7 @@ export default function App() {
         });
       } catch (err) {
         console.error("Kunde inte spara till molnet:", err);
-        showToast("Ändringen blockerades. Du saknar administratörsbehörighet!", "error");
+        showToast("Ett fel uppstod när ändringen skulle sparas.", "error");
       }
     } else {
       localStorage.setItem(`wishlist_offline_${listId}`, JSON.stringify(updatedList));
@@ -242,7 +236,6 @@ export default function App() {
     showToast(`${childName} raderades.`);
   };
 
-  // Kombinerad submit-funktion för Ny och Redigera
   const handleSubmitWish = (e) => {
     e.preventDefault();
     if (!newWish.name.trim()) {
@@ -251,7 +244,6 @@ export default function App() {
     }
 
     if (editingId) {
-      // Vi är i redigeringsläge
       const updatedItems = wishlist.items.map(item => 
         item.id === editingId ? { ...item, ...newWish } : item
       );
@@ -259,7 +251,6 @@ export default function App() {
       showToast("Önskningen har uppdaterats!");
       setEditingId(null);
     } else {
-      // Skapar ny önskning
       const item = {
         id: 'wish-' + Math.random().toString(36).substring(2, 11),
         child: newWish.child || wishlist.children[0] || 'Okänd',
@@ -277,7 +268,6 @@ export default function App() {
       showToast(`Lade till önskningen "${item.name}"!`);
     }
 
-    // Töm formuläret
     setNewWish({
       child: wishlist.children[0] || '',
       name: '',
@@ -289,7 +279,6 @@ export default function App() {
     });
   };
 
-  // Nya funktioner för att hantera klick på Redigera
   const handleEditClick = (item) => {
     setNewWish({
       child: item.child,
@@ -451,7 +440,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Inloggning Google - Alltid synlig för administratörer */}
             {user ? (
               <div className="flex items-center gap-2 bg-slate-100 p-1 pl-3 rounded-xl ml-2 border border-slate-200">
                 <span className="text-xs font-bold text-slate-700 truncate max-w-[100px]">
@@ -473,7 +461,6 @@ export default function App() {
               </button>
             )}
 
-            {/* Inbjudningsknapp för med-admin */}
             {mode === 'edit' && isAdmin && user && (
               <button
                 onClick={handleCreateInviteLink}
@@ -499,7 +486,6 @@ export default function App() {
 
       <main className="max-w-5xl mx-auto px-4 mt-8">
         
-        {/* Säkerhetsmeddelande om man försöker redigera utan att vara admin */}
         {mode === 'edit' && !isAdmin && (
           <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl mb-6 text-sm font-medium animate-pulse">
             🔒 Du är i föräldraläge men är inte inloggad som administratör för denna lista. Logga in eller använd en inbjudningslänk för att kunna göra ändringar.
