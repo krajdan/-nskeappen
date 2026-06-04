@@ -90,11 +90,19 @@ export default function App() {
       setListId(sharedId);
       setMode('view');
     } else {
-      // Tvingar prototypen att alltid hämta din exakta lista från databasen
-      setListId('list-8vg83bmvt');
+      if (user) {
+        setListId(`list-${user.uid}`);
+      } else {
+        let localId = localStorage.getItem('myWishlistId');
+        if (!localId) {
+          localId = 'list-' + Math.random().toString(36).substring(2, 11);
+          localStorage.setItem('myWishlistId', localId);
+        }
+        setListId(localId);
+      }
       setMode('edit');
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!db || !listId) {
