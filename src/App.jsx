@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, setDoc, onSnapshot } from "firebase/firestore";
+import { doc, setDoc, onSnapshot, collection, addDoc } from "firebase/firestore";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import { db, auth, googleProvider } from './firebase';
 
@@ -79,7 +79,6 @@ export default function App() {
     }
   };
 
-  // DEN VIKTIGA FIXEN FÖR LIST-ID
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const sharedId = urlParams.get('listId');
@@ -120,9 +119,13 @@ export default function App() {
         
         if (inviteToken && user && data.inviteToken === inviteToken) {
           const currentAdmins = data.adminIds || [];
+          const currentEmails = data.adminEmails || []; 
+          
           if (!currentAdmins.includes(user.uid)) {
             const updatedAdmins = [...currentAdmins, user.uid];
-            setDoc(docRef, { ...data, adminIds: updatedAdmins, inviteToken: null }, { merge: true })
+            const updatedEmails = [...currentEmails, user.email].filter(Boolean); 
+            
+            setDoc(docRef, { ...data, adminIds: updatedAdmins, adminEmails: updatedEmails, inviteToken: null }, { merge: true })
               .then(() => {
                 showToast("Inbjudan godkänd! Du är nu med-förälder för denna lista. 🎉");
                 window.history.replaceState({}, document.title, window.location.pathname + `?listId=${listId}`);
@@ -137,7 +140,7 @@ export default function App() {
           createdAt: new Date().toISOString()
         };
         if (user) {
-          setDoc(docRef, { ...initialData, adminIds: [user.uid] })
+          setDoc(docRef, { ...initialData, adminIds: [user.uid], adminEmails: [user.email] })
             .then(() => setWishlist(initialData))
             .catch(err => console.error("Kunde inte spara grundlista:", err));
         } else {
@@ -156,10 +159,12 @@ export default function App() {
       try {
         const docRef = doc(db, 'wishlists', listId);
         const currentAdmins = updatedList.adminIds || wishlist.adminIds || (user ? [user.uid] : []);
+        const currentEmails = updatedList.adminEmails || wishlist.adminEmails || (user ? [user.email] : []);
         
         await setDoc(docRef, { 
           ...updatedList, 
-          adminIds: currentAdmins
+          adminIds: currentAdmins,
+          adminEmails: currentEmails
         });
       } catch (err) {
         console.error("Kunde inte spara till molnet:", err);
@@ -236,7 +241,7 @@ export default function App() {
     showToast(`${childName} raderades.`);
   };
 
-  const handleSubmitWish = (e) => {
+  const handleSubmitWish = async (e) => {
     e.preventDefault();
     if (!newWish.name.trim()) {
       showToast("Önskningen måste ha ett namn!", "error");
@@ -266,6 +271,32 @@ export default function App() {
       const updatedItems = [item, ...wishlist.items];
       saveWishlist({ ...wishlist, items: updatedItems });
       showToast(`Lade till önskningen "${item.name}"!`);
+
+      // Skicka e-postnotis dynamiskt
+      const recipients = wishlist.adminEmails || [];
+      if (db && recipients.length > 0) {
+        try {
+          await addDoc(collection(db, 'mail'), {
+            to: recipients,
+            message: {
+              subject: `✨ Ny önskning tillagd för ${item.child}!`,
+              html: `
+                <h2>Ny present på listan!</h2>
+                <p>En ny önskning har lagts till för <strong>${item.child}</strong>:</p>
+                <ul>
+                  <li><strong>Vad:</strong> ${item.name}</li>
+                  <li><strong>Kategori:</strong> ${item.category}</li>
+                  <li><strong>Pris:</strong> ${item.price ? item.price + ' kr' : 'Ej angivet'}</li>
+                  <li><strong>Prioritet:</strong> ${item.priority}</li>
+                </ul>
+                <p>Gå in i appen för att se den uppdaterade listan!</p>
+              `
+            }
+          });
+        } catch (err) {
+          console.error("Kunde inte trigga e-postnotis:", err);
+        }
+      }
     }
 
     setNewWish({
@@ -316,18 +347,22 @@ export default function App() {
     setReservationModal({ show: true, itemId: id, name: '' });
   };
 
-  const handleReserve = () => {
+  const handleReserve = async () => {
     if (!reservationModal.name.trim()) {
       showToast("Vänligen skriv ditt namn för att reservera önskningen", "error");
       return;
     }
 
+    const reserverName = reservationModal.name.trim();
+    let reservedItemName = "";
+
     const updatedItems = wishlist.items.map(item => {
       if (item.id === reservationModal.itemId) {
+        reservedItemName = item.name;
         return {
           ...item,
           reserved: true,
-          reservedBy: reservationModal.name.trim()
+          reservedBy: reserverName
         };
       }
       return item;
@@ -336,6 +371,26 @@ export default function App() {
     saveWishlist({ ...wishlist, items: updatedItems });
     setReservationModal({ show: false, itemId: null, name: '' });
     showToast("Önskningen har reserverats!");
+
+    // Skicka e-postnotis dynamiskt
+    const recipients = wishlist.adminEmails || [];
+    if (db && recipients.length > 0) {
+      try {
+        await addDoc(collection(db, 'mail'), {
+          to: recipients,
+          message: {
+            subject: `🎁 Ny reservation på önskelistan!`,
+            html: `
+              <h2>Ny reservation!</h2>
+              <p><strong>${reserverName}</strong> har precis reserverat <strong>${reservedItemName}</strong> på barnens önskelista.</p>
+              <p>Härligt va! Gå till appen för att se den uppdaterade listan.</p>
+            `
+          }
+        });
+      } catch (err) {
+        console.error("Kunde inte trigga e-postnotis:", err);
+      }
+    }
   };
 
   const handleCancelReservation = (id) => {
